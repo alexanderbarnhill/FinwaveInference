@@ -158,8 +158,28 @@ When migration completes, the `inference-connector` repo can be archived. Whethe
 
 ## Not yet implemented
 
-- **YOLO postprocess** (`yolo_boxes_*`, `yolo_crops_base64`) — port from `toolkit/fin_detect/deploy/handler.py`.
 - **MAR adapter** — `artifact.format == "mar"` is currently rejected. The legacy adapter exists in the spec for the transition window but hasn't been written.
 - **Manifest warmup** — `FINWAVE_MODEL_MANIFEST_URL` is logged but ignored.
 - **`shutdown` semantics** — sessions are dropped on process exit; no explicit `unregister` endpoint yet.
 - **Metrics** — `/health` is the only observability hook. Prometheus exposition belongs here once cutover starts.
+
+## Implemented postprocess library
+
+Functions registered by name in `ModelCard.output.fields[].source`:
+
+| Name | Used by | Behaviour |
+|---|---|---|
+| `ncc_argmax_label` | Identifier, Classifier | Min-distance class label; respects `sub_centers`. |
+| `ncc_softmax_max` | Identifier | Max softmax probability with calibrated `temperature`. |
+| `ncc_softmax_dict` | Identifier | Full `{class: probability}` mapping. |
+| `is_novel` | Identifier | `min_distance > novelty_threshold`. |
+| `softmax_max_label` | SideClassifier, Validator | Argmax-of-softmax over an ONNX `logits` output. |
+| `softmax_max` | SideClassifier, Validator | Max softmax probability. |
+| `softmax_dict` | SideClassifier, Validator | Full `{class: probability}` mapping. |
+| `quality_score` | QualityScorer | Normalize the MLP output using saved `mean`/`std` from the sidecar. |
+| `yolo_boxes_proportional` | Detector | NMS + bbox decode + letterbox-undo → `[{X,Y,W,H}]` in [0,1] (centre-based). |
+| `yolo_boxes_absolute` | Detector | Same, in pixel coords. |
+| `yolo_crops_base64` | Detector | Crops the original image at each kept box and returns base64 JPEG/PNG (`crop_format` in `inference_config`). |
+| `yolo_confidences` | Detector | `[float]` of kept-box confidence scores. |
+
+YOLO thresholds come from `inference_config.conf_threshold` (default 0.15) and `inference_config.iou_threshold` (default 0.5).

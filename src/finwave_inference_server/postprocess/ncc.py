@@ -5,11 +5,9 @@ temperature-scaled softmax, sub-center support, novelty thresholding.
 """
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 
-from ._registry import register
+from ._registry import PostprocessCtx, register
 
 
 def _pairwise(a: np.ndarray, b: np.ndarray, metric: str) -> np.ndarray:
@@ -23,12 +21,14 @@ def _pairwise(a: np.ndarray, b: np.ndarray, metric: str) -> np.ndarray:
     raise ValueError(f"unknown distance metric: {metric!r}")
 
 
-def _distances(
-    embedding: np.ndarray, state: dict[str, Any], metric: str
-) -> tuple[np.ndarray, np.ndarray]:
+def _distances(ctx: PostprocessCtx) -> tuple[np.ndarray, np.ndarray]:
     """Return (per-class min distance, class labels)."""
+    state = ctx.state
+    if state is None:
+        raise ValueError("NCC postprocess requires a classifier sidecar (no state loaded)")
     classes = state["cls"]
-    emb = embedding.reshape(1, -1)
+    emb = ctx.outputs["embedding"].reshape(1, -1)
+    metric = ctx.card.inference_config.distance_metric
     if "sub_center_weights" in state:
         scw = state["sub_center_weights"]  # (num_classes, sub_centers, dim)
         num_classes, k, dim = scw.shape
@@ -46,44 +46,36 @@ def _softmax_probs(distances: np.ndarray, temperature: float) -> np.ndarray:
     return exp / exp.sum()
 
 
-def _label(card: Any, key: Any) -> str:
+def _label(card, key) -> str:
     cd = card.output.class_dict or {}
     k = str(key)
     return cd.get(k, k)
 
 
 @register("ncc_argmax_label")
-def ncc_argmax_label(onnx_outputs, card, state):
-    distances, classes = _distances(
-        onnx_outputs["embedding"], state, card.inference_config.distance_metric
-    )
-    return _label(card, classes[int(np.argmin(distances))])
+def ncc_argmax_label(ctx: PostprocessCtx):
+    distances, classes = _distances(ctx)
+    return _label(ctx.card, classes[int(np.argmin(distances))])
 
 
 @register("ncc_softmax_max")
-def ncc_softmax_max(onnx_outputs, card, state):
-    distances, _ = _distances(
-        onnx_outputs["embedding"], state, card.inference_config.distance_metric
-    )
-    probs = _softmax_probs(distances, card.inference_config.temperature)
+def ncc_softmax_max(ctx: PostprocessCtx):
+    distances, _ = _distances(ctx)
+    probs = _softmax_probs(distances, ctx.card.inference_config.temperature)
     return float(probs.max())
 
 
 @register("ncc_softmax_dict")
-def ncc_softmax_dict(onnx_outputs, card, state):
-    distances, classes = _distances(
-        onnx_outputs["embedding"], state, card.inference_config.distance_metric
-    )
-    probs = _softmax_probs(distances, card.inference_config.temperature)
-    return {_label(card, c): float(p) for c, p in zip(classes, probs)}
+def ncc_softmax_dict(ctx: PostprocessCtx):
+    distances, classes = _distances(ctx)
+    probs = _softmax_probs(distances, ctx.card.inference_config.temperature)
+    return {_label(ctx.card, c): float(p) for c, p in zip(classes, probs)}
 
 
 @register("is_novel")
-def is_novel(onnx_outputs, card, state):
-    distances, _ = _distances(
-        onnx_outputs["embedding"], state, card.inference_config.distance_metric
-    )
-    threshold = card.inference_config.novelty_threshold
+def is_novel(ctx: PostprocessCtx):
+    distances, _ = _distances(ctx)
+    threshold = ctx.card.inference_config.novelty_threshold
     if threshold is None:
         return False
     return bool(float(distances.min()) > threshold)

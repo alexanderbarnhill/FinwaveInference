@@ -52,11 +52,16 @@ class OutputSpec(_Base):
 
 
 class InferenceConfig(_Base):
+    # Identifier / Classifier (NCC) params
     distance_metric: Literal["cosine", "euclidean"] = "cosine"
     temperature: float = 1.0
     novelty_threshold: float | None = None
     novelty_threshold_99: float | None = None
     sub_centers: int = 0
+    # Detector (YOLO) params
+    conf_threshold: float = 0.15
+    iou_threshold: float = 0.5
+    crop_format: Literal["JPEG", "PNG"] = "JPEG"
 
 
 NodeType = Literal[

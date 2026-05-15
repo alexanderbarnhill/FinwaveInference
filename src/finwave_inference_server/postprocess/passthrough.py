@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ._registry import register
+from ._registry import PostprocessCtx, register
 
 
 def _softmax(x: np.ndarray) -> np.ndarray:
@@ -13,28 +13,29 @@ def _softmax(x: np.ndarray) -> np.ndarray:
 
 
 @register("softmax_max_label")
-def softmax_max_label(onnx_outputs, card, state):
-    logits = onnx_outputs["logits"].reshape(-1)
+def softmax_max_label(ctx: PostprocessCtx):
+    logits = ctx.outputs["logits"].reshape(-1)
     idx = int(np.argmax(_softmax(logits)))
-    cd = card.output.class_dict or {}
+    cd = ctx.card.output.class_dict or {}
     return cd.get(str(idx), str(idx))
 
 
 @register("softmax_max")
-def softmax_max(onnx_outputs, card, state):
-    return float(_softmax(onnx_outputs["logits"].reshape(-1)).max())
+def softmax_max(ctx: PostprocessCtx):
+    return float(_softmax(ctx.outputs["logits"].reshape(-1)).max())
 
 
 @register("softmax_dict")
-def softmax_dict(onnx_outputs, card, state):
-    probs = _softmax(onnx_outputs["logits"].reshape(-1))
-    cd = card.output.class_dict or {}
+def softmax_dict(ctx: PostprocessCtx):
+    probs = _softmax(ctx.outputs["logits"].reshape(-1))
+    cd = ctx.card.output.class_dict or {}
     return {cd.get(str(i), str(i)): float(p) for i, p in enumerate(probs)}
 
 
 @register("quality_score")
-def quality_score(onnx_outputs, card, state):
-    raw = float(onnx_outputs["score"].reshape(-1)[0])
+def quality_score(ctx: PostprocessCtx):
+    raw = float(ctx.outputs["score"].reshape(-1)[0])
+    state = ctx.state
     if state and "mean" in state and "std" in state:
         return (raw - float(state["mean"])) / max(float(state["std"]), 1e-12)
     return raw

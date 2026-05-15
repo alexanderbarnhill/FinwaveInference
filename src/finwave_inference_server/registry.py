@@ -20,6 +20,7 @@ from PIL import Image
 from .config import Settings
 from .loader import fetch_and_verify, load_classifier_state, load_onnx_session
 from .postprocess import get as get_postprocess
+from .postprocess._registry import PostprocessCtx
 from .schemas import FinwaveModelCard
 
 
@@ -82,19 +83,20 @@ class ModelRegistry:
 
     async def run(self, model_name: str, image_b64: str) -> dict[str, Any]:
         loaded = self.get(model_name)
-        tensor = _preprocess(image_b64, loaded.card)
+        original, tensor = _preprocess(image_b64, loaded.card)
         outputs = await asyncio.to_thread(_run_session, loaded.session, tensor)
-        return _assemble(outputs, loaded)
+        return _assemble(outputs, original, loaded)
 
 
-def _preprocess(image_b64: str, card: FinwaveModelCard) -> np.ndarray:
-    img = Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("RGB")
+def _preprocess(image_b64: str, card: FinwaveModelCard) -> tuple[Image.Image, np.ndarray]:
+    """Decode + letterbox-pad + normalize. Returns (original PIL, NCHW tensor)."""
+    original = Image.open(io.BytesIO(base64.b64decode(image_b64))).convert("RGB")
     size = card.input.image_size
-    img = _resize_letterbox(img, size)
-    arr = np.asarray(img, dtype=np.float32) / 255.0
+    letterboxed = _resize_letterbox(original, size)
+    arr = np.asarray(letterboxed, dtype=np.float32) / 255.0
     arr = arr.transpose(2, 0, 1)  # HWC → CHW
     arr = _normalize(arr, card.input.normalization)
-    return arr[None, ...]
+    return original, arr[None, ...]
 
 
 def _resize_letterbox(img: Image.Image, size: int) -> Image.Image:
@@ -127,7 +129,15 @@ def _run_session(
     return dict(zip(output_names, raw))
 
 
-def _assemble(outputs: dict[str, np.ndarray], loaded: LoadedModel) -> dict[str, Any]:
+def _assemble(
+    outputs: dict[str, np.ndarray], image: Image.Image, loaded: LoadedModel
+) -> dict[str, Any]:
+    ctx = PostprocessCtx(
+        outputs=outputs,
+        card=loaded.card,
+        state=loaded.classifier_state,
+        image=image,
+    )
     response: dict[str, Any] = {}
     for field in loaded.card.output.fields:
         prefix, _, ref = field.source.partition(":")
@@ -140,7 +150,7 @@ def _assemble(outputs: dict[str, np.ndarray], loaded: LoadedModel) -> dict[str, 
             )
         elif prefix == "postprocess":
             fn = get_postprocess(ref)
-            response[field.name] = fn(outputs, loaded.card, loaded.classifier_state)
+            response[field.name] = fn(ctx)
         else:
             raise ValueError(f"unsupported source prefix: {prefix!r}")
     return response
