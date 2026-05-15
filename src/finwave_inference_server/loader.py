@@ -36,6 +36,17 @@ async def fetch_and_verify(card: FinwaveModelCard, dest_dir: Path) -> dict[str, 
 
 
 async def _download_to(client: httpx.AsyncClient, url: str, dest: Path) -> None:
+    if url.startswith("file://"):
+        src = Path(url[len("file://") :])
+        if not src.is_absolute():
+            raise ValueError(f"file:// URL must be absolute: {url}")
+        with src.open("rb") as inp, dest.open("wb") as out:
+            while True:
+                chunk = inp.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+        return
     async with client.stream("GET", url) as resp:
         resp.raise_for_status()
         with dest.open("wb") as fp:
