@@ -1,13 +1,12 @@
 ARG PYTHON_VERSION=3.11
 
-FROM python:${PYTHON_VERSION}-slim
+FROM python:${PYTHON_VERSION}-slim-bookworm
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgl1 \
-        libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+# Pillow's manylinux wheel is self-contained; onnxruntime CPU wheel ships its own
+# libs. If we later add a runtime dep needing system libs (e.g. opencv-python),
+# add the matching apt install here.
 
 COPY pyproject.toml ./
 COPY src/ ./src/

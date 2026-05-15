@@ -142,7 +142,13 @@ docker run --rm -p 5003:5003 \
   finwave-inference-server:dev
 ```
 
-Pin a tag and push to GHCR from CI; the deploy host pulls the image. Avoid the `scp tarball` deploy pattern the .NET 6 connector inherited.
+If you're behind a VPN that black-holes the default Docker bridge network (eduVPN does this), add `--network=host` to the build:
+
+```bash
+docker build --network=host -t finwave-inference-server:dev .
+```
+
+CI doesn't need this — `.github/workflows/docker.yml` builds and pushes to GHCR on every push to `main`, on tags `v*`, and on manual dispatch. Pull from `ghcr.io/alexanderbarnhill/finwaveinference` once it's run.
 
 ## Where this lives in the workspace
 
