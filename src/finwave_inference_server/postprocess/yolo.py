@@ -55,6 +55,21 @@ def _decode_v8(
     return boxes_xyxy, scores, class_ids
 
 
+def _decode_e2e(
+    raw: np.ndarray, conf_threshold: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Decode an end-to-end / NMS-free detector (YOLOv10/YOLO26) output.
+
+    Layout is `(num_detections, 6)` = `[x1, y1, x2, y2, score, class]`, already
+    xyxy in model-input space and already NMS-filtered, so we only threshold.
+    """
+    if raw.shape[1] != 6:
+        raise ValueError(f"expected e2e shape (num_det, 6); got {raw.shape}")
+    keep = raw[:, 4] >= conf_threshold
+    r = raw[keep]
+    return (r[:, :4].astype(np.float32), r[:, 4].astype(np.float32), r[:, 5].astype(int))
+
+
 def _nms(boxes_xyxy: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np.ndarray:
     """Non-maximum suppression. Returns indices to keep, sorted by score desc."""
     if len(boxes_xyxy) == 0:
@@ -118,11 +133,17 @@ def _all_boxes(ctx: PostprocessCtx) -> tuple[np.ndarray, np.ndarray, np.ndarray]
     if raw.ndim == 3:
         raw = raw[0]
 
-    boxes, scores, class_ids = _decode_v8(raw, cfg.conf_threshold)
-    keep = _nms(boxes, scores, cfg.iou_threshold)
-    boxes = boxes[keep]
-    scores = scores[keep]
-    class_ids = class_ids[keep]
+    # End-to-end detectors (YOLOv10/26) emit (num_det, 6); classic YOLOv8 emits
+    # (4+nc, anchors) where the second axis is thousands of anchors. The e2e
+    # output is already NMS-filtered, so skip NMS for it.
+    if raw.ndim == 2 and raw.shape[1] == 6:
+        boxes, scores, class_ids = _decode_e2e(raw, cfg.conf_threshold)
+    else:
+        boxes, scores, class_ids = _decode_v8(raw, cfg.conf_threshold)
+        keep = _nms(boxes, scores, cfg.iou_threshold)
+        boxes = boxes[keep]
+        scores = scores[keep]
+        class_ids = class_ids[keep]
 
     boxes_orig = _undo_letterbox(boxes, ctx.card.input.image_size, ctx.image.size)
     result = (boxes_orig, scores, class_ids)
