@@ -86,6 +86,12 @@ class FinwaveModelCard(_Base):
     output: OutputSpec
     inference_config: InferenceConfig = InferenceConfig()
     artifact: ArtifactSpec
+    # Non-runtime metadata, preserved end-to-end so a deployed model stays
+    # self-describing: where it came from (checkpoint, dataset, backbone, git
+    # SHA, calibration source) and how it scored (held-out rank-1/5). Optional
+    # for backward compatibility with older cards.
+    provenance: dict[str, Any] | None = None
+    evaluation: dict[str, Any] | None = None
 
 
 class InferenceRequest(_Base):

@@ -27,12 +27,13 @@ async def lifespan(_app: FastAPI):
     global _registry
     settings = get_settings()
     _registry = ModelRegistry(settings)
-    if settings.model_manifest_url:
-        log.warning(
-            "model_manifest_url=%s set, but warmup loading is not implemented yet",
-            settings.model_manifest_url,
-        )
-    log.info("registry initialised; model_store=%s", settings.model_store_path)
+    # Reload models persisted in the store so a restart doesn't drop everything
+    # and require manual re-registration.
+    reloaded = _registry.reload_persisted()
+    log.info(
+        "registry initialised; model_store=%s; reloaded %d persisted model(s)",
+        settings.model_store_path, reloaded,
+    )
     yield
     _registry = None
 
