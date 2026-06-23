@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     supported_spec_major: int = 1
     listen_host: str = "0.0.0.0"
     listen_port: int = 5003
+    # Reject inference requests whose decoded image exceeds this many MB (bounds memory / DoS).
+    max_image_mb: int = 12
 
 
 @lru_cache
