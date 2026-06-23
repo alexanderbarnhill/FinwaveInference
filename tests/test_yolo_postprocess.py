@@ -154,6 +154,29 @@ def test_yolo_pipeline_proportional_box() -> None:
     assert confs == pytest.approx([0.9], abs=1e-6)
 
 
+def test_proportional_boxes_are_centre_based_and_normalised() -> None:
+    """Contract guard: the Hub + report frontend rely on proportional, CENTRE-based
+    {X, Y, W, H} in [0, 1] (and absolute = proportional × image dims). If this convention
+    ever changes, the box overlays in the model report silently misalign."""
+    card = _make_card(image_size=640)
+    raw = _raw_v8([(320, 320, 100, 100)], [0.9])  # square image → no letterbox
+    ctx = _ctx(raw, card, orig_size=(640, 640))
+
+    prop = get("yolo_boxes_proportional")(ctx)[0]
+    abs_box = get("yolo_boxes_absolute")(ctx)[0]
+
+    for k in ("X", "Y", "W", "H"):
+        assert 0.0 <= prop[k] <= 1.0, f"{k} not normalised to [0,1]: {prop[k]}"
+    # X/Y are the box CENTRE (model-space centre 320 of 640 → 0.5), not a corner.
+    assert prop["X"] == pytest.approx(0.5)
+    assert prop["Y"] == pytest.approx(0.5)
+    # Absolute is the same convention in pixels.
+    assert abs_box["X"] == pytest.approx(prop["X"] * 640)
+    assert abs_box["Y"] == pytest.approx(prop["Y"] * 640)
+    assert abs_box["W"] == pytest.approx(prop["W"] * 640)
+    assert abs_box["H"] == pytest.approx(prop["H"] * 640)
+
+
 def test_yolo_pipeline_returns_crops() -> None:
     card = _make_card(image_size=640)
     raw = _raw_v8([(320, 320, 200, 200)], [0.95])
