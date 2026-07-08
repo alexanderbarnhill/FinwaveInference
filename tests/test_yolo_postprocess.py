@@ -172,6 +172,19 @@ def test_yolo_pipeline_empty_when_no_detections() -> None:
     assert get("yolo_crops_base64")(ctx) == []
 
 
+def test_yolo_absolute_boxes_carry_confidence() -> None:
+    # The worker's DetectorHandler reads AbsoluteBoxes[i]["Confidence"] (default
+    # 1.0). Each absolute box must carry the detection score, else every ML
+    # annotation lands as Probability=1.0.
+    card = _make_card(image_size=640)
+    raw = _raw_v8([(320, 320, 100, 100)], [0.73])
+    ctx = _ctx(raw, card, orig_size=(640, 640))
+    boxes = get("yolo_boxes_absolute")(ctx)
+    assert len(boxes) == 1
+    assert set(boxes[0]) >= {"X", "Y", "W", "H", "Confidence"}
+    assert boxes[0]["Confidence"] == pytest.approx(0.73, abs=1e-5)
+
+
 def test_postprocess_registry_lists_all_fns() -> None:
     from finwave_inference_server.postprocess import names
 

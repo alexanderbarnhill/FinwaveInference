@@ -99,5 +99,15 @@ class InferenceRequest(_Base):
     image: str  # base64-encoded PNG/JPEG
 
 
+class LegacyInferenceRequest(_Base):
+    """Wire-compatible with the finwave-inference-worker's InferenceClient, which
+    POSTs {"Api": <model_name>, "Image": <base64>} to /api/inference (the legacy
+    TorchServe/.NET-connector contract). Lets the worker talk to this server
+    unchanged. See workers/finwave-inference-worker/src/inference/client.py."""
+
+    Api: str
+    Image: str  # base64-encoded PNG/JPEG
+
+
 class RegisterModelRequest(_Base):
     model_card: FinwaveModelCard

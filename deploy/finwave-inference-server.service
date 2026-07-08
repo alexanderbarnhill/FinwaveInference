@@ -1,0 +1,26 @@
+[Unit]
+# FinWave FastAPI inference server (ONNX). Loads registered models on start and
+# serves them on localhost for the co-located inference worker to call.
+Description=FinWave inference server (FastAPI/ONNX)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alex
+WorkingDirectory=/home/alex/git/finwave/inference-server
+# Secrets + config. Copy inference-server.env.example -> /etc/finwave/inference-server.env
+# (chmod 600) and fill in FINWAVE_API_KEY. FINWAVE_MODEL_STORE_PATH must be writable.
+EnvironmentFile=/etc/finwave/inference-server.env
+# Bind to localhost only: the worker runs on the same box, so nothing needs to
+# reach this from the network (no public exposure).
+ExecStart=/home/alex/git/finwave/inference-server/.venv/bin/uvicorn finwave_inference_server.main:app --host 127.0.0.1 --port 5003
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+# If/when you move to GPU (onnxruntime-gpu), also grant device access:
+#   SupplementaryGroups=video render
+
+[Install]
+WantedBy=multi-user.target

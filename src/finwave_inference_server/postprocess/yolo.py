@@ -172,9 +172,9 @@ def yolo_boxes_proportional(ctx: PostprocessCtx):
 
 @register("yolo_boxes_absolute")
 def yolo_boxes_absolute(ctx: PostprocessCtx):
-    boxes_xyxy, _, _ = _all_boxes(ctx)
+    boxes_xyxy, scores, _ = _all_boxes(ctx)
     out = []
-    for x1, y1, x2, y2 in boxes_xyxy:
+    for (x1, y1, x2, y2), score in zip(boxes_xyxy, scores):
         w = x2 - x1
         h = y2 - y1
         out.append(
@@ -183,6 +183,10 @@ def yolo_boxes_absolute(ctx: PostprocessCtx):
                 "Y": float(y1 + h / 2),
                 "W": float(w),
                 "H": float(h),
+                # Per-box confidence — the worker's DetectorHandler reads
+                # AbsoluteBoxes[i]["Confidence"] and defaults to 1.0 when absent,
+                # so without this every ML annotation would be Probability=1.0.
+                "Confidence": float(score),
             }
         )
     return out
