@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from .auth import api_key_required
 from .config import get_settings
 from .registry import ModelRegistry
-from .schemas import InferenceRequest, RegisterModelRequest
+from .schemas import InferenceRequest, LegacyInferenceRequest, RegisterModelRequest
 
 log = logging.getLogger("finwave.inference")
 
@@ -84,6 +84,20 @@ async def inference(
     _ensure_image_within_limit(req.image)
     try:
         return await registry.run(req.model_name, req.image)
+    except KeyError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@app.post("/api/inference")
+async def legacy_inference(
+    req: LegacyInferenceRequest,
+    registry: ModelRegistry = Depends(get_registry),
+) -> dict:
+    """Legacy alias so the finwave-inference-worker (which posts {Api, Image} to
+    /api/inference) can drive this server unchanged. Identical behaviour to
+    /inference — routes by model name and returns the canonical response."""
+    try:
+        return await registry.run(req.Api, req.Image)
     except KeyError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e))
 
