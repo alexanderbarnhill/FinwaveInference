@@ -62,9 +62,36 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+_dlls_preloaded = False
+
+
+def _ensure_cuda_libs() -> None:
+    """Load the CUDA/cuDNN shared libs shipped as nvidia-*-cu12 pip wheels.
+
+    onnxruntime-gpu ships the CUDA execution provider but not the CUDA runtime;
+    when those libs come from pip wheels (not a system CUDA install) they are not
+    on the loader path, so the CUDA EP fails to initialise. `preload_dlls()` loads
+    them from the installed wheels. No-op on CPU-only installs / older ORT.
+    """
+    global _dlls_preloaded
+    if not _dlls_preloaded and hasattr(ort, "preload_dlls"):
+        try:
+            ort.preload_dlls()
+        except Exception:  # best-effort — fall through to whatever EPs load
+            pass
+    _dlls_preloaded = True
+
+
+def _preferred_providers() -> list[str]:
+    """CUDA first, then CPU. Drop TensorRT: listing it without the TRT runtime
+    makes ORT raise and fall back to CPU-only, silently skipping CUDA too."""
+    available = set(ort.get_available_providers())
+    return [p for p in ("CUDAExecutionProvider", "CPUExecutionProvider") if p in available]
+
+
 def load_onnx_session(entrypoint: Path) -> ort.InferenceSession:
-    providers = ort.get_available_providers()
-    return ort.InferenceSession(str(entrypoint), providers=providers)
+    _ensure_cuda_libs()
+    return ort.InferenceSession(str(entrypoint), providers=_preferred_providers())
 
 
 def load_classifier_state(
