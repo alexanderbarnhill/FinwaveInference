@@ -8,8 +8,8 @@ This module decodes that raw tensor to bounding boxes in the original image's
 pixel space, runs NMS, and exposes four fields callers can wire from
 ModelCard.output.fields[].source:
 
-  - `yolo_boxes_proportional`  → [{X, Y, W, H}] in [0,1] (centre-based)
-  - `yolo_boxes_absolute`      → [{X, Y, W, H}] in pixels (centre-based)
+  - `yolo_boxes_proportional`  → [{X, Y, W, H}] in [0,1] (top-left origin)
+  - `yolo_boxes_absolute`      → [{X, Y, W, H}] in pixels (top-left origin)
   - `yolo_crops_base64`        → [base64-encoded JPEG/PNG crops of each box]
   - `yolo_confidences`         → [float] one score per kept box
 
@@ -159,10 +159,13 @@ def yolo_boxes_proportional(ctx: PostprocessCtx):
     for x1, y1, x2, y2 in boxes_xyxy:
         w = x2 - x1
         h = y2 - y1
+        # X,Y are the box's TOP-LEFT corner (finwave annotations use top-left origin,
+        # matching human-drawn Konva boxes). Reporting the centre here shifted every
+        # machine box down-right by (W/2, H/2).
         out.append(
             {
-                "X": float(x1 + w / 2) / orig_w,
-                "Y": float(y1 + h / 2) / orig_h,
+                "X": float(x1) / orig_w,
+                "Y": float(y1) / orig_h,
                 "W": float(w) / orig_w,
                 "H": float(h) / orig_h,
             }
@@ -177,10 +180,11 @@ def yolo_boxes_absolute(ctx: PostprocessCtx):
     for (x1, y1, x2, y2), score in zip(boxes_xyxy, scores):
         w = x2 - x1
         h = y2 - y1
+        # X,Y = top-left corner (see yolo_boxes_proportional).
         out.append(
             {
-                "X": float(x1 + w / 2),
-                "Y": float(y1 + h / 2),
+                "X": float(x1),
+                "Y": float(y1),
                 "W": float(w),
                 "H": float(h),
                 # Per-box confidence — the worker's DetectorHandler reads
