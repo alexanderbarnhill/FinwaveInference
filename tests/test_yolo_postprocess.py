@@ -17,6 +17,7 @@ from finwave_inference_server.postprocess._registry import PostprocessCtx, get
 from finwave_inference_server.postprocess.yolo import (
     _decode_v8,
     _nms,
+    _suppress_contained,
     _undo_letterbox,
 )
 from finwave_inference_server.schemas import (
@@ -111,6 +112,53 @@ def test_nms_keeps_distant_boxes() -> None:
     assert sorted(keep.tolist()) == [0, 1]
 
 
+# ── containment suppression (favour smaller crops) ────────────────────────
+
+def test_suppress_contained_drops_larger_keeps_tighter() -> None:
+    # A tight fin box fully inside a loose body box → keep the tight (smaller) crop.
+    tight = [100, 100, 150, 180]
+    loose = [80, 80, 200, 220]
+    boxes = np.array([loose, tight], dtype=np.float32)  # index 0 loose, 1 tight
+    keep = _suppress_contained(boxes, ios_threshold=0.7)
+    assert keep.tolist() == [1]
+
+
+def test_suppress_contained_keeps_distinct_fins() -> None:
+    # Two side-by-side fins that don't overlap → both survive.
+    boxes = np.array([[100, 100, 160, 190], [400, 100, 460, 190]], dtype=np.float32)
+    keep = _suppress_contained(boxes, ios_threshold=0.7)
+    assert sorted(keep.tolist()) == [0, 1]
+
+
+def test_suppress_contained_keeps_partial_overlap_below_threshold() -> None:
+    # Smaller box only ~36% inside the larger (IoS < 0.7) → not the same fin, keep both.
+    small = [100, 100, 150, 150]
+    big = [120, 120, 320, 320]
+    boxes = np.array([big, small], dtype=np.float32)
+    keep = _suppress_contained(boxes, ios_threshold=0.7)
+    assert sorted(keep.tolist()) == [0, 1]
+
+
+def test_suppress_contained_collapses_nested_stack() -> None:
+    # Three concentric boxes on one fin → only the smallest kept.
+    boxes = np.array([[80, 80, 190, 230], [90, 90, 160, 190], [100, 100, 140, 160]], dtype=np.float32)
+    keep = _suppress_contained(boxes, ios_threshold=0.7)
+    assert keep.tolist() == [2]
+
+
+def test_pipeline_favours_smaller_crop_end_to_end() -> None:
+    # Two detections on the same fin: a loose high-score box and a tight lower-score one.
+    # NMS alone (iou 0.5) would keep the loose one (higher score); the containment pass
+    # instead keeps the tighter crop. Square 640 image → no letterbox.
+    card = _make_card(image_size=640)
+    # loose: centre (320,320) 200x200 → covers the tight one; tight: centre (320,320) 80x80.
+    raw = _raw_v8([(320, 320, 200, 200), (320, 320, 80, 80)], [0.95, 0.60])
+    ctx = _ctx(raw, card, orig_size=(640, 640))
+    boxes = get("yolo_boxes_absolute")(ctx)
+    assert len(boxes) == 1
+    assert boxes[0]["W"] == pytest.approx(80.0, abs=1.0)  # the tight crop, not the 200px one
+
+
 # ── letterbox undo ────────────────────────────────────────────────────────
 
 def test_undo_letterbox_landscape() -> None:
@@ -139,25 +187,28 @@ def test_yolo_pipeline_proportional_box() -> None:
     raw = _raw_v8([(320, 320, 100, 100)], [0.9])
     ctx = _ctx(raw, card, orig_size=(800, 600))
 
+    # X,Y are the box TOP-LEFT corner (see PR #5). Model-space box is centred at (320,320)
+    # with w=h=100 → top-left (270,270). Undo letterbox (scale 0.8, pad_y 80): x1=337.5,
+    # y1=237.5. Proportional: 337.5/800, 237.5/600.
     prop = get("yolo_boxes_proportional")(ctx)
     assert len(prop) == 1
-    assert prop[0]["X"] == 0.5
-    assert prop[0]["Y"] == 0.5
+    assert prop[0]["X"] == pytest.approx(337.5 / 800)
+    assert prop[0]["Y"] == pytest.approx(237.5 / 600)
     assert abs(prop[0]["W"] - 125 / 800) < 1e-6
     assert abs(prop[0]["H"] - 125 / 600) < 1e-6
 
     abs_boxes = get("yolo_boxes_absolute")(ctx)
-    assert abs(abs_boxes[0]["X"] - 400.0) < 1e-3
-    assert abs(abs_boxes[0]["Y"] - 300.0) < 1e-3
+    assert abs(abs_boxes[0]["X"] - 337.5) < 1e-3
+    assert abs(abs_boxes[0]["Y"] - 237.5) < 1e-3
 
     confs = get("yolo_confidences")(ctx)
     assert confs == pytest.approx([0.9], abs=1e-6)
 
 
-def test_proportional_boxes_are_centre_based_and_normalised() -> None:
-    """Contract guard: the Hub + report frontend rely on proportional, CENTRE-based
-    {X, Y, W, H} in [0, 1] (and absolute = proportional × image dims). If this convention
-    ever changes, the box overlays in the model report silently misalign."""
+def test_proportional_boxes_are_top_left_based_and_normalised() -> None:
+    """Contract guard: the Hub + report frontend rely on proportional, TOP-LEFT-based
+    {X, Y, W, H} in [0, 1] (and absolute = proportional × image dims). Reporting the centre
+    (the pre-#5 bug) shifted every machine box down-right by (W/2, H/2)."""
     card = _make_card(image_size=640)
     raw = _raw_v8([(320, 320, 100, 100)], [0.9])  # square image → no letterbox
     ctx = _ctx(raw, card, orig_size=(640, 640))
@@ -167,9 +218,9 @@ def test_proportional_boxes_are_centre_based_and_normalised() -> None:
 
     for k in ("X", "Y", "W", "H"):
         assert 0.0 <= prop[k] <= 1.0, f"{k} not normalised to [0,1]: {prop[k]}"
-    # X/Y are the box CENTRE (model-space centre 320 of 640 → 0.5), not a corner.
-    assert prop["X"] == pytest.approx(0.5)
-    assert prop["Y"] == pytest.approx(0.5)
+    # X/Y are the box TOP-LEFT corner: model-space centre 320 with w=100 → x1=270 of 640.
+    assert prop["X"] == pytest.approx(270 / 640)
+    assert prop["Y"] == pytest.approx(270 / 640)
     # Absolute is the same convention in pixels.
     assert abs_box["X"] == pytest.approx(prop["X"] * 640)
     assert abs_box["Y"] == pytest.approx(prop["Y"] * 640)
