@@ -95,6 +95,40 @@ def _nms(boxes_xyxy: np.ndarray, scores: np.ndarray, iou_threshold: float) -> np
     return np.array(keep, dtype=int)
 
 
+def _suppress_contained(boxes_xyxy: np.ndarray, ios_threshold: float) -> np.ndarray:
+    """Drop a larger box when a smaller box overlaps it enough to be the same detection.
+
+    Favours the *smaller* crop. Identification works better on a tight dorsal-fin crop than on
+    a loose box that also swallows body/water, but standard NMS keeps the highest-*score* box
+    regardless of size — so a loose, high-confidence box can shadow a tight one on the same fin
+    (their IoU may even sit under the NMS threshold, leaving both alive → duplicate crops that
+    each get identified separately). This pass measures intersection-over-smaller-area (IoS):
+    when a smaller box lies largely inside a larger one (IoS >= threshold) they're the same fin,
+    so the larger box is suppressed and the tighter crop kept. Genuinely distinct fins barely
+    overlap (low IoS) and are both retained. Returns indices to keep."""
+    n = len(boxes_xyxy)
+    if n < 2:
+        return np.arange(n)
+    x1, y1, x2, y2 = boxes_xyxy[:, 0], boxes_xyxy[:, 1], boxes_xyxy[:, 2], boxes_xyxy[:, 3]
+    areas = np.clip(x2 - x1, 0, None) * np.clip(y2 - y1, 0, None)
+    order = np.argsort(areas)  # smallest first — a smaller box can only suppress a larger one
+    keep = np.ones(n, dtype=bool)
+    for a in range(n):
+        i = int(order[a])
+        if not keep[i] or areas[i] <= 0:
+            continue
+        for b in range(a + 1, n):
+            j = int(order[b])  # areas[j] >= areas[i]
+            if not keep[j]:
+                continue
+            iw = min(x2[i], x2[j]) - max(x1[i], x1[j])
+            ih = min(y2[i], y2[j]) - max(y1[i], y1[j])
+            inter = max(0.0, iw) * max(0.0, ih)
+            if inter / areas[i] >= ios_threshold:  # smaller box i is mostly inside larger j
+                keep[j] = False
+    return np.where(keep)[0]
+
+
 def _undo_letterbox(
     boxes_xyxy: np.ndarray, model_size: int, orig_size: tuple[int, int]
 ) -> np.ndarray:
@@ -144,6 +178,15 @@ def _all_boxes(ctx: PostprocessCtx) -> tuple[np.ndarray, np.ndarray, np.ndarray]
         boxes = boxes[keep]
         scores = scores[keep]
         class_ids = class_ids[keep]
+
+    # Favour smaller crops: after NMS, drop any larger box that mostly contains a smaller one
+    # (they're the same fin — keep the tighter crop, which identifies better). Applied to the
+    # e2e path too, since its built-in NMS is score-based and can also leave nested boxes.
+    # Configurable via inference_config.containment_threshold (IoS); default 0.7, 0/None to skip.
+    ios_threshold = getattr(cfg, "containment_threshold", 0.7)
+    if ios_threshold and len(boxes) > 1:
+        keep = _suppress_contained(boxes, float(ios_threshold))
+        boxes, scores, class_ids = boxes[keep], scores[keep], class_ids[keep]
 
     boxes_orig = _undo_letterbox(boxes, ctx.card.input.image_size, ctx.image.size)
     result = (boxes_orig, scores, class_ids)
