@@ -61,7 +61,11 @@ IDENTIFIER_FIELDS = [
     {"name": "Class", "type": "string", "source": "postprocess:ncc_argmax_label"},
     {"name": "Probability", "type": "float", "source": "postprocess:ncc_softmax_max"},
     {"name": "Probabilities", "type": "object", "source": "postprocess:ncc_softmax_dict"},
-    {"name": "Embedding", "type": "array", "source": "onnx:embedding"},
+    # MUST be "float[]" (not "array"): the server's _assemble only flattens onnx-sourced
+    # fields whose type ends in "[]" or starts with "float[" — anything else falls through to
+    # value.item(), which raises on the multi-element embedding vector. (postprocess-sourced
+    # fields above are assembled via their fn(ctx), so their "object"/"array" types are fine.)
+    {"name": "Embedding", "type": "float[]", "source": "onnx:embedding"},
 ]
 FIELDS_BY_TYPE = {
     "Detector": DETECTOR_FIELDS,
