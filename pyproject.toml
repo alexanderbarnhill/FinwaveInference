@@ -12,7 +12,21 @@ dependencies = [
     "uvicorn[standard]>=0.27",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
-    "onnxruntime>=1.16",
+    # GPU inference. On Linux use the CUDA build + the CUDA-12 runtime wheels that
+    # loader.py's ort.preload_dlls() loads at startup — otherwise ORT falls back to
+    # CPU and the GPU sits idle. Pinned to the 1.22.x line because it targets CUDA 12
+    # (matching these cu12 wheels); onnxruntime-gpu 1.27+ needs CUDA 13 (libcudart.so.13).
+    # IMPORTANT: do NOT also depend on plain `onnxruntime` here — both provide the same
+    # `onnxruntime` import and the CPU build shadows the GPU one, silently disabling CUDA
+    # (this is the bug that pinned prod inference to CPU). On non-Linux dev (mac) use the
+    # CPU build, which is all that's available there.
+    "onnxruntime-gpu>=1.22,<1.23; platform_system == 'Linux'",
+    "nvidia-cudnn-cu12>=9,<10; platform_system == 'Linux'",
+    "nvidia-cublas-cu12; platform_system == 'Linux'",
+    "nvidia-cuda-runtime-cu12; platform_system == 'Linux'",
+    "nvidia-cufft-cu12; platform_system == 'Linux'",
+    "nvidia-curand-cu12; platform_system == 'Linux'",
+    "onnxruntime>=1.16; platform_system != 'Linux'",
     "numpy>=1.26,<3",
     "pillow>=10.0",
     "httpx>=0.27",
