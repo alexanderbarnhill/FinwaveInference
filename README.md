@@ -4,7 +4,7 @@ FastAPI + onnxruntime service that replaces the `FinwaveInferenceConnector` + To
 
 ## Status
 
-**Skeleton.** Wired end-to-end for the Identifier paradigm (ONNX encoder + NCC classifier sidecar). YOLO Detector postprocess is stubbed (`NotImplementedError`); MAR adapter for legacy models is not implemented; warmup-from-manifest is a TODO log line. See `backend-ml.md` for the migration plan.
+**Skeleton.** Wired end-to-end for the Identifier paradigm (ONNX encoder + NCC classifier sidecar). YOLO Detector postprocess is stubbed (`NotImplementedError`); MAR adapter for legacy models is not implemented. Warmup-from-manifest is implemented (`FINWAVE_MODEL_MANIFEST_URL`), so a fresh box can self-load its assigned models at startup. See `backend-ml.md` for the migration plan.
 
 ## What it does
 
@@ -56,7 +56,7 @@ All variables are prefixed `FINWAVE_`. In dev a `.env` file in this directory is
 |---|---|---|
 | `FINWAVE_API_KEY` | — (required) | Shared secret for `/models/*` endpoints. |
 | `FINWAVE_MODEL_STORE_PATH` | `/var/lib/finwave/models` | Where downloaded artifact files are cached. |
-| `FINWAVE_MODEL_MANIFEST_URL` | unset | (Future) Manifest of ModelCard URLs to preload on startup. |
+| `FINWAVE_MODEL_MANIFEST_URL` | unset | Manifest of ModelCards to preload on startup (see "Manifest warmup"). A relative `card_url` / artifact URL inside it resolves against the manifest URL and inherits its query string, so one SAS on the manifest URL covers every nested fetch. |
 | `FINWAVE_SUPPORTED_SPEC_MAJOR` | `1` | Reject cards with a different major version. |
 | `FINWAVE_LISTEN_HOST` | `0.0.0.0` | |
 | `FINWAVE_LISTEN_PORT` | `5003` | |
@@ -132,6 +132,28 @@ POST a `FinwaveModelCard` to `/models/register`. The card's `artifact.files[].ur
 
 The `classifier.npz` for the NCC paradigm contains: `cls` (class IDs), `centroids` (and optionally `sub_center_weights`), produced by `pipeline_ml/deploy.py:build_mar` today and adapted to ship as a sidecar instead of being embedded in the MAR.
 
+## Manifest warmup
+
+Set `FINWAVE_MODEL_MANIFEST_URL` and the server registers every model the manifest lists at startup (after reloading anything already in the store), so a fresh box, for example a newly deployed worker runner, comes up with its assigned models loaded instead of serving `503` from `/ready` until each one is POSTed by hand. Registration reuses the same fetch + sha256 verification + local persistence as `/models/register`, so after the first warmup the artifacts live in the store and a later restart reloads them with no network and no dependence on a by-then-expired SAS.
+
+The manifest is JSON. Any of these shapes is accepted:
+
+```jsonc
+{"models": [ {"card_url": "FIN_DETECT/card.json"}, {"card_url": "WAKW_miew_id/card.json"} ]}
+{"models": [ {"card": { /* ...FinwaveModelCard... */ }} ]}   // inline cards
+[ { /* ...FinwaveModelCard... */ } ]                         // bare list of cards
+```
+
+A relative `card_url` (and a relative `artifact.files[].url` inside a fetched card) resolves against its parent document's URL and inherits that URL's query string. So the Hub can mint one read SAS, append it to the manifest URL, and lay the blob out as:
+
+```
+models/manifest.json          <- FINWAVE_MODEL_MANIFEST_URL (?<sas>)
+models/FIN_DETECT/card.json   <- card_url "FIN_DETECT/card.json"
+models/FIN_DETECT/model.onnx  <- the card's artifact file "model.onnx"
+```
+
+and every nested fetch carries the same SAS with no per-URL rewriting. Absolute URLs (any scheme, including `file://`) pass through untouched. Warmup is best-effort: a failure on the manifest fetch or any single model is logged and never blocks startup; the server still serves whatever reloaded from the store and still accepts `/models/register`. A model already loaded with a matching entrypoint `sha256` is skipped; a changed `sha256` re-registers (so bumping a model in the manifest updates the box on its next restart).
+
 ## Building the container
 
 ```bash
@@ -159,7 +181,6 @@ When migration completes, the `inference-connector` repo can be archived. Whethe
 ## Not yet implemented
 
 - **MAR adapter** — `artifact.format == "mar"` is currently rejected. The legacy adapter exists in the spec for the transition window but hasn't been written.
-- **Manifest warmup** — `FINWAVE_MODEL_MANIFEST_URL` is logged but ignored.
 - **`shutdown` semantics** — sessions are dropped on process exit; no explicit `unregister` endpoint yet.
 - **Metrics** — `/health` is the only observability hook. Prometheus exposition belongs here once cutover starts.
 

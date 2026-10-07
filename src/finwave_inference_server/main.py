@@ -11,6 +11,7 @@ from .auth import api_key_required
 from .config import get_settings
 from .registry import ModelRegistry
 from .schemas import InferenceRequest, LegacyInferenceRequest, RegisterModelRequest
+from .warmup import warm_from_manifest
 
 log = logging.getLogger("finwave.inference")
 
@@ -35,6 +36,11 @@ async def lifespan(_app: FastAPI):
         "registry initialised; model_store=%s; reloaded %d persisted model(s)",
         settings.model_store_path, reloaded,
     )
+    # Warm from the manifest (if configured) so a fresh box comes up with its
+    # assigned models loaded instead of serving 503 until manual registration.
+    # Best-effort: failures are logged inside and never block startup.
+    if settings.model_manifest_url:
+        await warm_from_manifest(_registry, settings)
     yield
     _registry = None
 

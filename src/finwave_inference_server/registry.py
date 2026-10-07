@@ -68,6 +68,13 @@ class ModelRegistry:
             raise KeyError(f"model {name!r} not loaded")
         return self._models[name]
 
+    def loaded_names(self) -> set[str]:
+        return set(self._models)
+
+    def loaded_card(self, name: str) -> FinwaveModelCard | None:
+        loaded = self._models.get(name)
+        return loaded.card if loaded else None
+
     async def register(self, card: FinwaveModelCard) -> None:
         major = int(card.spec_version.split(".", 1)[0])
         if major != self._settings.supported_spec_major:
