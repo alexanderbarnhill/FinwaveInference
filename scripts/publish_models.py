@@ -80,6 +80,15 @@ def _content_type(name: str) -> str:
     return "application/octet-stream"
 
 
+def _blob_size(container_client, blob_name: str) -> int | None:
+    """Size of an existing blob, or None if it doesn't exist (used to skip
+    already-uploaded artifacts on a resume)."""
+    try:
+        return container_client.get_blob_client(blob_name).get_blob_properties().size
+    except Exception:
+        return None
+
+
 def _iter_model_dirs(store: Path, only: set[str] | None):
     for card_path in sorted(store.glob(f"*/{CARD_FILENAME}")):
         model_dir = card_path.parent
@@ -103,6 +112,13 @@ def publish(args: argparse.Namespace) -> int:
         service = BlobServiceClient(
             f"https://{args.account}.blob.core.windows.net",
             credential=DefaultAzureCredential(),
+            # Large artifacts over a flaky uplink: upload in blocks (not one PUT),
+            # in parallel, with retries + generous timeouts so a transient write
+            # timeout doesn't abort the whole publish.
+            retry_total=5, retry_connect=5, retry_read=5,
+            connection_timeout=60, read_timeout=600,
+            max_single_put_size=8 * 1024 * 1024,
+            max_block_size=8 * 1024 * 1024,
         )
         container_client = service.get_container_client(args.container)
         try:
@@ -147,11 +163,19 @@ def publish(args: argparse.Namespace) -> int:
         if not args.dry_run:
             from azure.storage.blob import ContentSettings
             for fname, local in local_files:
+                blob_name = f"{name}/{fname}"
+                size = local.stat().st_size
+                # Resume: skip a blob already uploaded at the same size, so a re-run
+                # after a mid-publish failure only moves what's left.
+                if _blob_size(container_client, blob_name) == size:
+                    print(f"  skip {fname} (already uploaded, {size / 1e6:.1f} MB)")
+                    continue
                 with local.open("rb") as data:
                     container_client.upload_blob(
-                        name=f"{name}/{fname}", data=data, overwrite=True,
+                        name=blob_name, data=data, overwrite=True, max_concurrency=4,
                         content_settings=ContentSettings(content_type=_content_type(fname)),
                     )
+                print(f"  uploaded {fname} ({size / 1e6:.1f} MB)")
             container_client.upload_blob(
                 name=card_blob, data=json.dumps(card, indent=2).encode(), overwrite=True,
                 content_settings=ContentSettings(content_type="application/json"),
